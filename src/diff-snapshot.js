@@ -41,14 +41,28 @@ function diffImageToSnapshot(options) {
 
     const diffConfig = Object.assign({}, defaultDiffConfig, customDiffConfig);
 
-    const receivedImage = PNG.sync.read(receivedImageBuffer);
-    const baselineImage = PNG.sync.read(fs.readFileSync(baselineSnapshotPath));
+    let receivedImage = PNG.sync.read(receivedImageBuffer);
+    let baselineImage = PNG.sync.read(fs.readFileSync(baselineSnapshotPath));
 
+    // Align image sizes on mismatch
     if (
-      receivedImage.height !== baselineImage.height || receivedImage.width !== baselineImage.width
+      receivedImage.height !== baselineImage.height ||
+      receivedImage.width !== baselineImage.width
     ) {
-      throw new Error('toMatchImageSnapshot(): Received image size must match baseline snapshot size in order to make comparison.');
+      const createEmptyImage = (width, height) =>
+        new PNG({ width, height, fill: true });
+      const copyImage = (source, target) =>
+        PNG.bitblt(source, target, 0, 0, source.width, source.height, 0, 0);
+      const maxCommonWidth = Math.max(receivedImage.width, baselineImage.width);
+      const maxCommonHeight = Math.max(receivedImage.height, baselineImage.height);
+      const nextReceivedImage = createEmptyImage(maxCommonWidth, maxCommonHeight);
+      const nextBaselineImage = createEmptyImage(maxCommonWidth, maxCommonHeight);
+      copyImage(receivedImage, nextReceivedImage);
+      copyImage(baselineImage, nextBaselineImage);
+      receivedImage = nextReceivedImage;
+      baselineImage = nextBaselineImage;
     }
+
     const imageWidth = receivedImage.width;
     const imageHeight = receivedImage.height;
     const diffImage = new PNG({ width: imageWidth, height: imageHeight });
@@ -71,7 +85,9 @@ function diffImageToSnapshot(options) {
     } else if (failureThresholdType === 'percent') {
       pass = diffRatio <= failureThreshold;
     } else {
-      throw new Error(`Unknown failureThresholdType: ${failureThresholdType}. Valid options are "pixel" or "percent".`);
+      throw new Error(
+        `Unknown failureThresholdType: ${failureThresholdType}. Valid options are "pixel" or "percent".`
+      );
     }
 
     if (!pass) {
@@ -81,22 +97,31 @@ function diffImageToSnapshot(options) {
         height: imageHeight,
       });
       // copy baseline, diff, and received images into composite result image
+      PNG.bitblt(baselineImage, compositeResultImage, 0, 0, imageWidth, imageHeight, 0, 0);
+      PNG.bitblt(diffImage, compositeResultImage, 0, 0, imageWidth, imageHeight, imageWidth, 0);
       PNG.bitblt(
-        baselineImage, compositeResultImage, 0, 0, imageWidth, imageHeight, 0, 0
-      );
-      PNG.bitblt(
-        diffImage, compositeResultImage, 0, 0, imageWidth, imageHeight, imageWidth, 0
-      );
-      PNG.bitblt(
-        receivedImage, compositeResultImage, 0, 0, imageWidth, imageHeight, imageWidth * 2, 0
+        receivedImage,
+        compositeResultImage,
+        0,
+        0,
+        imageWidth,
+        imageHeight,
+        imageWidth * 2,
+        0
       );
 
       const input = { imagePath: diffOutputPath, image: compositeResultImage };
 
       // writing diff in separate process to avoid perf issues associated with Math in Jest VM (https://github.com/facebook/jest/issues/5163)
-      const writeDiffProcess = childProcess.spawnSync('node', [`${__dirname}/write-result-diff-image.js`], { input: Buffer.from(JSON.stringify(input)) });
+      const writeDiffProcess = childProcess.spawnSync(
+        'node',
+        [`${__dirname}/write-result-diff-image.js`],
+        { input: Buffer.from(JSON.stringify(input)) }
+      );
       // in case of error print to console
-      if (writeDiffProcess.stderr.toString()) { console.log(writeDiffProcess.stderr.toString()); } // eslint-disable-line no-console, max-len
+      if (writeDiffProcess.stderr.toString()) {
+        console.log(writeDiffProcess.stderr.toString());
+      } // eslint-disable-line no-console, max-len
     }
 
     result = {
